@@ -31,14 +31,17 @@ const ugcToCounty = {
     "OHC169": "Wayne", "OHC171": "Williams", "OHC173": "Wood", "OHC175": "Wyandot"
   };
 
-function formatCountyList(areaDesc) {
-    const counties = areaDesc
+  function formatCountyList(areaDesc) {
+    const allCounties = areaDesc
       .split(";")
-      .map(c => c.replace(", OH", "").trim())
-      .filter(c => c.length > 0);
+      .map(c => c.trim().replace(", OH", ""))
+      .filter(Boolean);
   
-    if (counties.length === 1) return `${counties[0]} County`;
-    return `${counties.slice(0, -1).join(", ")}, and ${counties.slice(-1)} Counties`;
+    const ohioCounties = allCounties.filter(c => Object.values(ugcToCounty).includes(c));
+    
+    if (ohioCounties.length === 0) return "";
+    if (ohioCounties.length === 1) return `${ohioCounties[0]} County`;
+    return `${ohioCounties.slice(0, -1).join(", ")}, and ${ohioCounties.slice(-1)} Counties`;
   }
 
   async function fetchAndDisplayAlerts() {
@@ -53,59 +56,81 @@ function formatCountyList(areaDesc) {
   
       entries.forEach(entry => {
         const id = entry.querySelector("id")?.textContent;
-        let event = "";
-        let areaDesc = "";
-        let expiresISO = "";
-        let sentISO = "";
-      
-        // Loop through children and get CAP fields by tag name (ignore namespaces)
+        let event = "", areaDesc = "", expiresISO = "", sentISO = "", msgType = "Alert";
+        let wind = "", hail = "", tornadoPossible = false;
+  
+        // Get CAP fields
         Array.from(entry.children).forEach(child => {
           const tag = child.localName;
-      
           if (tag === "event") event = child.textContent.trim();
           if (tag === "areaDesc") areaDesc = child.textContent.trim();
           if (tag === "expires") expiresISO = child.textContent.trim();
           if (tag === "sent") sentISO = child.textContent.trim();
           if (tag === "msgType") msgType = child.textContent.trim();
         });
+  
+        // Extract <cap:parameter> block
+        const CAP_NS = "urn:oasis:names:tc:emergency:cap:1.1";
+        const params = entry.getElementsByTagNameNS(CAP_NS, "parameter");
+        for (let p of params) {
+          const name = p.getElementsByTagNameNS(CAP_NS, "valueName")[0]?.textContent;
+          const val = p.getElementsByTagNameNS(CAP_NS, "value")[0]?.textContent;
+          if (name === "maxWindGust" && val) wind = val;
+          if (name === "maxHailSize" && val) hail = val;
+          if (name === "tornadoTag" && val === "POSSIBLE") tornadoPossible = true;
+        }
+  
+        // Extract UGCs and check if any are Ohio
+        const ugcElements = entry.getElementsByTagNameNS("urn:oasis:names:tc:emergency:cap:1.1", "geocode");
+        let hasOhioCounty = false;
+        for (let g of ugcElements) {
+          const name = g.querySelector("valueName")?.textContent;
+          const val = g.querySelector("value")?.textContent;
+          if (name === "UGC" && val && val.startsWith("OHC")) {
+            hasOhioCounty = true;
+            break;
+          }
+        }
+        if (!hasOhioCounty) return;
+  
+        if (!["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event)) return;
+  
         const sent = new Date(sentISO).getTime();
         const expires = new Date(expiresISO).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
-      
-        if (!["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event)) return;
-      
-        const formattedText = `🚨 ${event} for ${areaDesc} until ${expires}`;
-        const formattedCounties = formatCountyList(areaDesc);
-      
+  
+        const hazardParts = [];
+        if (wind) hazardParts.push(wind);
+        if (hail) hazardParts.push(`${hail}" hail`);
+        if (tornadoPossible) hazardParts.push("Tornado Possible");
+  
+        const hazardsText = hazardParts.length ? ` Hazards: ${hazardParts.join(" and ")}` : "";
+  
+        const baseText = `${event} – ${formatCountyList(areaDesc)} until ${expires}`;
         const alertObj = {
-            id,
-            text: `${event} – ${formatCountyList(areaDesc)} until ${expires}`,
-            type: eventColor(event),
-            expires: expiresISO
-          };
-          
-          // Always include in sidebar/ticker
-          newActiveWarnings.push(alertObj);
-          
-          // Only trigger popup if new
-          if (!seenAlertIds.has(id)) {
-            // Only trigger popup for *new* alerts, not updates
-            if (sent > pageLoadTime && msgType === "Alert") {
-              triggerPopup(`🚨 ${event} for ${areaDesc} until ${expires}`, event);
-            }
-            seenAlertIds.add(id);
+          id,
+          text: baseText + hazardsText,
+          type: eventColor(event),
+          expires: expiresISO
+        };
+  
+        newActiveWarnings.push(alertObj);
+  
+        // Popup only for new alerts, not updates
+        if (!seenAlertIds.has(id)) {
+          if (sent > pageLoadTime && msgType === "Alert") {
+            triggerPopup(`🚨 ${event} for ${areaDesc} until ${expires}`, event);
           }
+          seenAlertIds.add(id);
+        }
       });
-
+  
       console.log("✅ Found", newActiveWarnings.length, "active warnings:", newActiveWarnings);
-
+  
       newActiveWarnings.sort((a, b) => {
-        // 1. Tornado Warnings first
         const isTornadoA = a.text.includes("Tornado Warning");
         const isTornadoB = b.text.includes("Tornado Warning");
         if (isTornadoA && !isTornadoB) return -1;
         if (!isTornadoA && isTornadoB) return 1;
-      
-        // 2. Otherwise, sort by newest (latest `expires`)
         return new Date(b.expires) - new Date(a.expires);
       });
   
@@ -114,6 +139,7 @@ function formatCountyList(areaDesc) {
       console.error("⚠️ Fetch failed:", err);
     }
   }
+  
 
 let activeWarningTimers = [];
 
@@ -333,8 +359,21 @@ function startTickerRotation() {
     tickerIndex = 0; // reset index
   
     // Always show the first message
-    rotator.textContent = tickerMessages[0];
-    rotator.style.opacity = 1;
+    const firstMessage = tickerMessages[0];
+rotator.textContent = firstMessage;
+rotator.className = ""; // Clear previous class
+
+if (firstMessage.includes("Tornado Warning")) {
+  rotator.classList.add("ticker-red");
+} else if (firstMessage.includes("Severe Thunderstorm Warning")) {
+  rotator.classList.add("ticker-yellow");
+} else if (firstMessage.includes("Flash Flood Warning")) {
+  rotator.classList.add("ticker-darkred");
+} else {
+  rotator.classList.add("ticker-default");
+}
+
+rotator.style.opacity = 1;
   
     // Only rotate if more than one message
     if (tickerMessages.length > 1) {
@@ -344,20 +383,20 @@ function startTickerRotation() {
         setTimeout(() => {
           tickerIndex = (tickerIndex + 1) % tickerMessages.length;
           const message = tickerMessages[tickerIndex];
-rotator.textContent = message;
-rotator.className = ""; // Clear previous class
-
-if (message.includes("Tornado Warning")) {
-  rotator.classList.add("ticker-red");
-} else if (message.includes("Severe Thunderstorm Warning")) {
-  rotator.classList.add("ticker-yellow");
-} else if (message.includes("Flash Flood Warning")) {
-  rotator.classList.add("ticker-darkred");
-} else {
-  rotator.classList.add("ticker-default");
-}
-
-rotator.style.opacity = 1;
+          
+          rotator.className = ""; // Clear previous class
+          if (message.includes("Tornado Warning")) {
+            rotator.classList.add("ticker-red");
+          } else if (message.includes("Severe Thunderstorm Warning")) {
+            rotator.classList.add("ticker-yellow");
+          } else if (message.includes("Flash Flood Warning")) {
+            rotator.classList.add("ticker-darkred");
+          } else {
+            rotator.classList.add("ticker-default");
+          }
+        
+          rotator.textContent = message;
+          rotator.style.opacity = 1;
         }, 500);
       };
   
