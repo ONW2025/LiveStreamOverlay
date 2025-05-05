@@ -59,6 +59,17 @@ const ugcToCounty = {
         let event = "", areaDesc = "", expiresISO = "", sentISO = "", msgType = "Alert";
         let wind = "", hail = "", tornadoPossible = false;
   
+        // Check for Ohio UGC codes
+        const ugcValues = Array.from(entry.getElementsByTagNameNS("*", "geocode"))
+          .flatMap(geo => {
+            const nameEl = geo.getElementsByTagNameNS("*", "valueName")[0];
+            const valEl = geo.getElementsByTagNameNS("*", "value")[0];
+            return nameEl?.textContent === "UGC" ? [valEl?.textContent] : [];
+          });
+  
+        const hasOhioUGC = ugcValues.some(code => code && code.startsWith("OHC"));
+        if (!hasOhioUGC) return; // Skip if no Ohio coverage
+  
         // Get CAP fields
         Array.from(entry.children).forEach(child => {
           const tag = child.localName;
@@ -80,42 +91,28 @@ const ugcToCounty = {
           if (name === "tornadoTag" && val === "POSSIBLE") tornadoPossible = true;
         }
   
-        // Extract UGCs and check if any are Ohio
-        const ugcElements = entry.getElementsByTagNameNS("urn:oasis:names:tc:emergency:cap:1.1", "geocode");
-        let hasOhioCounty = false;
-        for (let g of ugcElements) {
-          const name = g.querySelector("valueName")?.textContent;
-          const val = g.querySelector("value")?.textContent;
-          if (name === "UGC" && val && val.startsWith("OHC")) {
-            hasOhioCounty = true;
-            break;
-          }
-        }
-        if (!hasOhioCounty) return;
-  
-        if (!["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event)) return;
-  
-        const sent = new Date(sentISO).getTime();
-        const expires = new Date(expiresISO).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
-  
         const hazardParts = [];
         if (wind) hazardParts.push(wind);
         if (hail) hazardParts.push(`${hail}" hail`);
         if (tornadoPossible) hazardParts.push("Tornado Possible");
-  
         const hazardsText = hazardParts.length ? ` Hazards: ${hazardParts.join(" and ")}` : "";
   
+        const sent = new Date(sentISO).getTime();
+        const expires = new Date(expiresISO).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
+  
+        if (!["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event)) return;
+  
         const baseText = `${event} – ${formatCountyList(areaDesc)} until ${expires}`;
+  
         const alertObj = {
           id,
-          text: baseText + hazardsText,
+          text: baseText + hazardsText,  // For ticker
           type: eventColor(event),
           expires: expiresISO
         };
   
         newActiveWarnings.push(alertObj);
   
-        // Popup only for new alerts, not updates
         if (!seenAlertIds.has(id)) {
           if (sent > pageLoadTime && msgType === "Alert") {
             triggerPopup(`🚨 ${event} for ${areaDesc} until ${expires}`, event);
@@ -139,7 +136,6 @@ const ugcToCounty = {
       console.error("⚠️ Fetch failed:", err);
     }
   }
-  
 
 let activeWarningTimers = [];
 
@@ -197,11 +193,9 @@ function updateSidebar(warnings) {
       li.remove();
     }
   });
-
-  updateTickerText();
   updatePromoVisibility();
+  updateTickerText();
 }
-
 
 function eventColor(event) {
   switch (event) {
@@ -383,25 +377,24 @@ rotator.style.opacity = 1;
         setTimeout(() => {
           tickerIndex = (tickerIndex + 1) % tickerMessages.length;
           const message = tickerMessages[tickerIndex];
-          
-          rotator.className = ""; // Clear previous class
-          if (message.includes("Tornado Warning")) {
-            rotator.classList.add("ticker-red");
-          } else if (message.includes("Severe Thunderstorm Warning")) {
-            rotator.classList.add("ticker-yellow");
-          } else if (message.includes("Flash Flood Warning")) {
-            rotator.classList.add("ticker-darkred");
-          } else {
-            rotator.classList.add("ticker-default");
-          }
-        
-          rotator.textContent = message;
-          rotator.style.opacity = 1;
+rotator.textContent = message;
+rotator.className = ""; // Clear previous class
+
+if (message.includes("Tornado Warning")) {
+  rotator.classList.add("ticker-red");
+} else if (message.includes("Severe Thunderstorm Warning")) {
+  rotator.classList.add("ticker-yellow");
+} else if (message.includes("Flash Flood Warning")) {
+  rotator.classList.add("ticker-darkred");
+} else {
+  rotator.classList.add("ticker-default");
+}
+
+rotator.style.opacity = 1;
         }, 500);
       };
   
       tickerInterval = setInterval(rotate, 6000);
-      updatePromoVisibility();
     }
   }
   
@@ -437,8 +430,7 @@ rotator.style.opacity = 1;
   
     activeWarningTimers.push(timer);
     list.insertBefore(li, list.firstChild);
-updateTickerText();
-updatePromoVisibility(); // 👈 Ensures image visibility is correct after test warning
+    updateTickerText();
   }
 
   // Make the test panel draggable
@@ -497,7 +489,6 @@ function makeTestPanelDraggable() {
   }
   
   makeTestPanelDraggable();
-  rotatePromoImages();
 
 // Start fetch
 fetchAndDisplayAlerts();
