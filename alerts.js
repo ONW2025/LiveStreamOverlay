@@ -362,6 +362,7 @@ rotator.style.opacity = 1;
       };
   
       tickerInterval = setInterval(rotate, 6000);
+      updatePromoVisibility();
     }
   }
   
@@ -397,7 +398,8 @@ rotator.style.opacity = 1;
   
     activeWarningTimers.push(timer);
     list.insertBefore(li, list.firstChild);
-    updateTickerText();
+updateTickerText();
+updatePromoVisibility(); // 👈 Ensures image visibility is correct after test warning
   }
 
   // Make the test panel draggable
