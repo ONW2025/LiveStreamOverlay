@@ -34,7 +34,7 @@ body {
     top: 0;
     width: 320px;
     height: 100%;
-    background-color: rgba(0, 0, 0, 1.0);
+    background-color: rgba(0, 0, 0, 0.9);
     color: white;
     padding: 16px;
     overflow-y: auto;
@@ -137,15 +137,28 @@ body {
     align-items: center;
     justify-content: center;
     font-weight: bold;
-    font-size: 1.4em;
+    font-size: 1.6em;
     color: white;
   }
   
   #alertRotator {
-    opacity: 0;
-    transition: opacity 0.5s ease-in-out;
-    text-align: center;
     white-space: nowrap;
+    position: relative;
+    display: block;
+    max-width: 100%;
+  }
+
+  #alertRotator.scroll {
+    animation: scrollText 10s linear infinite;
+  }
+
+  @keyframes scrollText {
+    0% {
+      transform: translateX(0%);
+    }
+    100% {
+      transform: translateX(-100%);
+    }
   }
 
   .ticker-red {
@@ -192,6 +205,19 @@ body {
       transform: translateY(0);
     }
   }
+  @keyframes flash-border {
+    0%   { box-shadow: 0 0 0px white; }
+    50%  { box-shadow: 0 0 15px 4px white; }
+    100% { box-shadow: 0 0 0px white; }
+  }
+  
+  .new-warning-flash {
+    animation: flash-border 1s ease-out 2;
+    background-color: rgba(255, 255, 255, 0.03); /* optional: slight background change for visibility */
+    border-radius: 4px;
+    position: relative; /* ensure box-shadow renders properly */
+    z-index: 1;
+  }
   
   .slide-in {
     animation: slideDown 0.4s ease-out;
@@ -199,12 +225,12 @@ body {
 
   #onwLogo {
     position: fixed;
-    bottom: 10px;
+    bottom: 0px;
     left: 10px;
-    height: 120px;
+    height: 240px;
     z-index: 1000;
     pointer-events: none;
-    opacity: 0.9;
+    opacity: 1.0;
   }
   
   #promoRotator {

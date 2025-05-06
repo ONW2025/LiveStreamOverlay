@@ -3,7 +3,7 @@ let activeWarnings = [];
 let lastTickerHTML = "";
 const pageLoadTime = Date.now();
 let seenAlertIds = new Set();  // <-- this is our simple ID cache
-const CAP_NS = "urn:oasis:names:tc:emergency:cap:1.1";
+const CAP_NS = "urn:oasis:names:tc:emergency:cap:1.2";
 
 
 const ugcToCounty = {
@@ -32,16 +32,13 @@ const ugcToCounty = {
   };
 
   function formatCountyList(areaDesc) {
-    const allCounties = areaDesc
+    const counties = areaDesc
       .split(";")
-      .map(c => c.trim().replace(", OH", ""))
-      .filter(Boolean);
+      .map(c => c.replace(", OH", "").trim())
+      .filter(c => c.length > 0);
   
-    const ohioCounties = allCounties.filter(c => Object.values(ugcToCounty).includes(c));
-    
-    if (ohioCounties.length === 0) return "";
-    if (ohioCounties.length === 1) return `${ohioCounties[0]} County`;
-    return `${ohioCounties.slice(0, -1).join(", ")}, and ${ohioCounties.slice(-1)} Counties`;
+    if (counties.length === 1) return `${counties[0]} County`;
+    return `${counties.slice(0, -1).join(", ")}, and ${counties.slice(-1)} Counties`;
   }
 
   async function fetchAndDisplayAlerts() {
@@ -57,20 +54,8 @@ const ugcToCounty = {
       entries.forEach(entry => {
         const id = entry.querySelector("id")?.textContent;
         let event = "", areaDesc = "", expiresISO = "", sentISO = "", msgType = "Alert";
-        let wind = "", hail = "", tornadoPossible = false;
+        let wind = "", hail = "", tornadoDetection = "", hailThreat = "", windThreat = "";
   
-        // Check for Ohio UGC codes
-        const ugcValues = Array.from(entry.getElementsByTagNameNS("*", "geocode"))
-          .flatMap(geo => {
-            const nameEl = geo.getElementsByTagNameNS("*", "valueName")[0];
-            const valEl = geo.getElementsByTagNameNS("*", "value")[0];
-            return nameEl?.textContent === "UGC" ? [valEl?.textContent] : [];
-          });
-  
-        const hasOhioUGC = ugcValues.some(code => code && code.startsWith("OHC"));
-        if (!hasOhioUGC) return; // Skip if no Ohio coverage
-  
-        // Get CAP fields
         Array.from(entry.children).forEach(child => {
           const tag = child.localName;
           if (tag === "event") event = child.textContent.trim();
@@ -80,33 +65,41 @@ const ugcToCounty = {
           if (tag === "msgType") msgType = child.textContent.trim();
         });
   
-        // Extract <cap:parameter> block
-        const CAP_NS = "urn:oasis:names:tc:emergency:cap:1.1";
-        const params = entry.getElementsByTagNameNS(CAP_NS, "parameter");
-        for (let p of params) {
-          const name = p.getElementsByTagNameNS(CAP_NS, "valueName")[0]?.textContent;
-          const val = p.getElementsByTagNameNS(CAP_NS, "value")[0]?.textContent;
-          if (name === "maxWindGust" && val) wind = val;
-          if (name === "maxHailSize" && val) hail = val;
-          if (name === "tornadoTag" && val === "POSSIBLE") tornadoPossible = true;
+        // Use namespace-correct query with wildcard fallback if needed
+        const paramBlocks = entry.getElementsByTagNameNS("*", "parameter");
+        for (let p of paramBlocks) {
+          const name = p.getElementsByTagName("valueName")[0]?.textContent;
+          const val = p.getElementsByTagName("value")[0]?.textContent;
+          if (!name || !val) continue;
+          if (name === "maxWindGust") wind = val;
+          if (name === "maxHailSize") hail = val;
+          if (name === "tornadoDetection") tornadoDetection = val;
+          if (name === "hailThreat") hailThreat = val;
+          if (name === "windThreat") windThreat = val;
         }
   
         const hazardParts = [];
-        if (wind) hazardParts.push(wind);
-        if (hail) hazardParts.push(`${hail}" hail`);
-        if (tornadoPossible) hazardParts.push("Tornado Possible");
+        if (tornadoDetection) hazardParts.push(` Tornado ${tornadoDetection}`);
+        if (wind) hazardParts.push(`${wind} Winds`);
+        if (hail) hazardParts.push(`${hail}\" Hail`);
+  
         const hazardsText = hazardParts.length ? ` Hazards: ${hazardParts.join(" and ")}` : "";
   
         const sent = new Date(sentISO).getTime();
         const expires = new Date(expiresISO).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
   
-        if (!["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event)) return;
+        if (
+          !["Tornado Warning", "Severe Thunderstorm Warning"].includes(event) ||
+          msgType === "Cancel"
+        ) {
+          return;
+        }
   
         const baseText = `${event} – ${formatCountyList(areaDesc)} until ${expires}`;
   
         const alertObj = {
           id,
-          text: baseText + hazardsText,  // For ticker
+          text: baseText + hazardsText,
           type: eventColor(event),
           expires: expiresISO
         };
@@ -122,6 +115,10 @@ const ugcToCounty = {
       });
   
       console.log("✅ Found", newActiveWarnings.length, "active warnings:", newActiveWarnings);
+      
+      if (lastSidebarSnapshot === "" && newActiveWarnings.length === 0) {
+        updateSidebar([]);
+      }
   
       newActiveWarnings.sort((a, b) => {
         const isTornadoA = a.text.includes("Tornado Warning");
@@ -130,369 +127,359 @@ const ugcToCounty = {
         if (!isTornadoA && isTornadoB) return 1;
         return new Date(b.expires) - new Date(a.expires);
       });
-  
+      
       updateSidebar(newActiveWarnings);
     } catch (err) {
       console.error("⚠️ Fetch failed:", err);
     }
   }
 
-let activeWarningTimers = [];
-
-function updateSidebar(warnings) {
-  const list = document.getElementById("activeWarningsList");
-  const existingItems = new Map();
-
-  // Cache existing items by ID
-  list.querySelectorAll("li").forEach(li => {
-    existingItems.set(li.dataset.id, li);
-  });
-
-  const idsToKeep = new Set();
-
-  warnings.forEach(warn => {
-    idsToKeep.add(warn.id);
-
-    // If already exists, do nothing
-    if (existingItems.has(warn.id)) return;
-
-    // New warning – create and insert
-    const li = document.createElement("li");
-    li.dataset.id = warn.id;
-    li.dataset.text = warn.text; // ✅ store clean text for ticker
-    li.style.borderLeftColor = warn.type;
-    li.classList.add("slide-in");
-    const expires = new Date(warn.expires);
-
-    const updateText = () => {
+  let activeWarningTimers = [];
+  let lastSidebarSnapshot = "";
+  
+  function updateSidebar(warnings) {
+    const sidebar = document.getElementById("sidebar");
+    const list = document.getElementById("activeWarningsList");
+  
+    // Show or hide sidebar
+    if (warnings.length === 0) {
+      sidebar.style.display = "none"; // hide it
+    } else {
+      sidebar.style.display = "block"; // show it
+    }
+  
+    // Create a snapshot of current data
+    const snapshot = warnings.map(w => w.id).join("|||");
+    if (snapshot === lastSidebarSnapshot) return;
+    lastSidebarSnapshot = snapshot;
+  
+    // Clear timers and list
+    activeWarningTimers.forEach(clearInterval);
+    activeWarningTimers = [];
+    list.innerHTML = "";
+  
+    // ✅ No active warnings case
+    if (warnings.length === 0) {
+      const li = document.createElement("li");
+      li.textContent = "✅ No active warnings in Ohio";
+      li.classList.add("no-warning", "new-warning-flash");
+      setTimeout(() => li.classList.remove("new-warning-flash"), 2000);
+      list.appendChild(li);
+  
+      // Set ticker messages and trigger update
+      tickerMessages = ["✅ No active warnings in Ohio"];
+      lastTickerSnapshot = ""; // force update
+      updateTickerText();
+      return;
+    }
+  
+    // Populate active warnings
+    warnings.forEach(warn => {
+      const li = document.createElement("li");
+      li.dataset.id = warn.id;
+      li.dataset.text = warn.text;
+      li.style.borderLeftColor = warn.type;
+      li.classList.add("slide-in", "new-warning-flash");
+      setTimeout(() => li.classList.remove("new-warning-flash"), 2000);
+  
+      const expires = new Date(warn.expires);
+      const updateText = () => {
         const remaining = Math.max(0, expires - Date.now());
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
-        li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`; // shown in sidebar only
+        li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`;
       };
-
-    updateText();
-
-    const timer = setInterval(() => {
-      if (Date.now() >= expires) {
-        li.remove();
-        updateTickerText();
-        clearInterval(timer);
-      } else {
-        updateText();
-      }
-    }, 1000);
-
-    activeWarningTimers.push(timer);
-    list.insertBefore(li, list.firstChild);
-  });
-
-  // Remove expired items no longer in data
-  list.querySelectorAll("li").forEach(li => {
-    if (!idsToKeep.has(li.dataset.id)) {
-      li.remove();
-    }
-  });
-  updatePromoVisibility();
-  updateTickerText();
-}
-
-function eventColor(event) {
-  switch (event) {
-    case "Tornado Warning": return "#ff3333";
-    case "Severe Thunderstorm Warning": return "#ffcc00";
-    case "Flash Flood Warning": return "#990000";
-    default: return "#ccc";
-  }
-}
-let lsrCache = new Set();
-
-async function fetchStormReports() {
-    try {
-      const res = await fetch("https://mesonet.agron.iastate.edu/geojson/lsr.geojson?states=OH&hours=2");
-      const data = await res.json();
-      const reports = data.features;
   
-      reports.forEach(report => {
-        const props = report.properties;
-        const id = `${props.valid}-${props.magnitude}-${props.city}`;
-        const reportTime = new Date(props.valid).getTime();
-      
-        if (lsrCache.has(id)) return;
-        if (reportTime <= pageLoadTime) {
-          lsrCache.add(id); // avoid showing later
-          return;
+      updateText();
+  
+      const timer = setInterval(() => {
+        if (Date.now() >= expires) {
+          li.remove();
+          updateTickerText();
+          clearInterval(timer);
+        } else {
+          updateText();
         }
-      
-        const time = new Date(props.valid).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
-        const event = props.typetext || props.type || "Storm Report";
-        const location = `${props.city}, ${props.county} Co`;
-        const magnitude = props.magnitude || props.magf || "";
-        const unit = props.unit || (event.toLowerCase().includes("hail") ? "in" : event.toLowerCase().includes("wind") ? "mph" : "");
-      
-        const magText = magnitude ? ` – ${magnitude}${unit}` : "";
-        const text = `🟢 ${event}${magText} – ${location} (${time})`;
-      
-        addStormReport(text);
-        lsrCache.add(id);
-      });
+      }, 1000);
   
-      // Trim the cache
-      if (lsrCache.size > 100) {
-        lsrCache = new Set(Array.from(lsrCache).slice(-50));
-      }
+      activeWarningTimers.push(timer);
+      list.appendChild(li);
+    });
   
-    } catch (err) {
-      console.error("⚠️ LSR Fetch Error:", err);
-    }
-  }
-
-  function triggerPopup(text, type = "default") {
-    const popup = document.getElementById("alertPopup");
-    popup.textContent = text;
-  
-    // Remove any old color class
-    popup.classList.remove("popup-red", "popup-yellow", "popup-darkred");
-  
-    // Add new based on type
-    if (type === "Tornado Warning") popup.classList.add("popup-red");
-    else if (type === "Severe Thunderstorm Warning") popup.classList.add("popup-yellow");
-    else if (type === "Flash Flood Warning") popup.classList.add("popup-darkred");
-  
-    popup.classList.add("show");
-  
-    setTimeout(() => {
-      popup.classList.remove("show");
-    }, 15000);
-  }
-
-  function addStormReport(text) {
-    const container = document.getElementById("stormReportsContainer");
-    const div = document.createElement("div");
-    div.className = "report-card";
-    div.innerText = text;
-    container.appendChild(div);
-  
-    // ✅ Play chime
-    const chime = document.getElementById("lsrChime");
-    if (chime) {
-      chime.currentTime = 0;
-      chime.play().catch(err => {
-        console.warn("🔇 Could not play LSR chime (possibly blocked by browser autoplay policy):", err);
-      });
-    }
-  
-    // ✅ Log to console
-    console.log("📢 New Storm Report:", text);
-  
-    setTimeout(() => container.removeChild(div), 15000);
-  }
-
-// Manual test
-function triggerTest(type) {
-    const time = new Date();
-    const timeStr = time.toLocaleTimeString("en-US", { timeZone: "America/New_York" });
-    const expires = new Date(time.getTime() + 10 * 60 * 1000); // expires in 10 minutes
-    const text = `🚨 ${type} for Hamilton County until ${timeStr}`;
-  
-    triggerPopup(text, type);
-  
-    const fakeWarn = {
-      id: "test-" + type + "-" + time.getTime(),
-      text: `${type} – Hamilton County until ${timeStr}`,
-      type: eventColor(type),
-      expires: expires.toISOString()
-    };
-  
-    addActiveWarning(fakeWarn);
-  }
-
-function triggerStormReport() {
-    const time = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York" });
-    const text = `🟢 Hail Report – Golf Ball Size near Dayton, OH (${time})`;
-    addStormReport(text);
-  }
-
-function addActiveWarning(text, color) {
-  const li = document.createElement("li");
-  li.textContent = text;
-  li.style.borderLeftColor = color;
-  document.getElementById("activeWarningsList").appendChild(li);
-}
-
-let tickerMessages = [];
-let tickerIndex = 0;
-let tickerInterval;
-let lastTickerSnapshot = "";
-
-function updateTickerText() {
-    const listItems = Array.from(document.querySelectorAll('#activeWarningsList li'));
-    const newMessages = listItems.map(li => li.dataset.text || li.textContent);
-  
-    if (newMessages.length === 0) {
-      newMessages.push("✅ No active warnings in Ohio");
-    }
-  
-    const snapshot = newMessages.join("|||"); // compact representation
-  
-    // 🔄 Only update and restart if the list changed
-    if (snapshot !== lastTickerSnapshot) {
-      tickerMessages = newMessages;
-      tickerIndex = 0;
-      lastTickerSnapshot = snapshot;
-      startTickerRotation();
-    }
-  }
-
-function startTickerRotation() {
-    const rotator = document.getElementById("alertRotator");
-    if (!rotator || tickerMessages.length === 0) return;
-  
-    clearInterval(tickerInterval); // stop previous loop
-  
-    tickerIndex = 0; // reset index
-  
-    // Always show the first message
-    const firstMessage = tickerMessages[0];
-rotator.textContent = firstMessage;
-rotator.className = ""; // Clear previous class
-
-if (firstMessage.includes("Tornado Warning")) {
-  rotator.classList.add("ticker-red");
-} else if (firstMessage.includes("Severe Thunderstorm Warning")) {
-  rotator.classList.add("ticker-yellow");
-} else if (firstMessage.includes("Flash Flood Warning")) {
-  rotator.classList.add("ticker-darkred");
-} else {
-  rotator.classList.add("ticker-default");
-}
-
-rotator.style.opacity = 1;
-  
-    // Only rotate if more than one message
-    if (tickerMessages.length > 1) {
-      const rotate = () => {
-        rotator.style.opacity = 0;
-  
-        setTimeout(() => {
-          tickerIndex = (tickerIndex + 1) % tickerMessages.length;
-          const message = tickerMessages[tickerIndex];
-rotator.textContent = message;
-rotator.className = ""; // Clear previous class
-
-if (message.includes("Tornado Warning")) {
-  rotator.classList.add("ticker-red");
-} else if (message.includes("Severe Thunderstorm Warning")) {
-  rotator.classList.add("ticker-yellow");
-} else if (message.includes("Flash Flood Warning")) {
-  rotator.classList.add("ticker-darkred");
-} else {
-  rotator.classList.add("ticker-default");
-}
-
-rotator.style.opacity = 1;
-        }, 500);
-      };
-  
-      tickerInterval = setInterval(rotate, 6000);
-    }
-  }
-  
-  // Also call in test
-  function addActiveWarning(warn) {
-    const list = document.getElementById("activeWarningsList");
-    const li = document.createElement("li");
-    li.dataset.id = warn.id;
-    li.style.borderLeftColor = warn.type;
-    li.classList.add("slide-in");
-  
-    const expires = new Date(warn.expires);
-  
-    const updateText = () => {
-      const remaining = Math.max(0, expires - Date.now());
-      const mins = Math.floor(remaining / 60000);
-      const secs = Math.floor((remaining % 60000) / 1000);
-      li.dataset.text = warn.text; // clean version for ticker
-      li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`;
-    };
-  
-    updateText();
-  
-    const timer = setInterval(() => {
-      if (Date.now() >= expires) {
-        li.remove();
-        updateTickerText();
-        clearInterval(timer);
-      } else {
-        updateText();
-      }
-    }, 1000);
-  
-    activeWarningTimers.push(timer);
-    list.insertBefore(li, list.firstChild);
     updateTickerText();
   }
-
-  // Make the test panel draggable
-function makeTestPanelDraggable() {
-    const panel = document.getElementById("testPanel");
-    const header = document.getElementById("testPanelHeader");
-    let offsetX = 0, offsetY = 0, isDragging = false;
   
-    header.addEventListener("mousedown", e => {
-      isDragging = true;
-      offsetX = e.clientX - panel.offsetLeft;
-      offsetY = e.clientY - panel.offsetTop;
-      document.body.style.userSelect = "none";
-    });
-  
-    document.addEventListener("mouseup", () => {
-      isDragging = false;
-      document.body.style.userSelect = "auto";
-    });
-  
-    document.addEventListener("mousemove", e => {
-      if (isDragging) {
-        panel.style.left = `${e.clientX - offsetX}px`;
-        panel.style.top = `${e.clientY - offsetY}px`;
-      }
-    });
-  }
-
-  function rotatePromoImages() {
-    const rotator = document.getElementById("promoRotator");
-    const images = rotator.querySelectorAll(".promo-img");
-  
-    let currentIndex = 0;
-    if (images.length === 0) return;
-  
-    rotator.style.display = "block";
-    images[0].style.display = "block";
-  
-    setInterval(() => {
-      images[currentIndex].style.display = "none";
-      currentIndex = (currentIndex + 1) % images.length;
-      images[currentIndex].style.display = "block";
-    }, 5000);
-  }
-  
-  // Only show promos if 0 or 1 warnings
-  function updatePromoVisibility() {
-    const list = document.getElementById("activeWarningsList");
-    const rotator = document.getElementById("promoRotator");
-  
-    if (list.children.length <= 1) {
-      rotator.style.display = "block";
-    } else {
-      rotator.style.display = "none";
+  function eventColor(event) {
+    switch (event) {
+      case "Tornado Warning": return "#ff3333";
+      case "Severe Thunderstorm Warning": return "#ffcc00";
+      case "Flash Flood Warning": return "#990000";
+      default: return "#ccc";
     }
   }
+  let lsrCache = new Set();
   
-  makeTestPanelDraggable();
-
-// Start fetch
-fetchAndDisplayAlerts();
-setInterval(fetchAndDisplayAlerts, 6000); // every 7 Seconds
-
-fetchStormReports();
-setInterval(fetchStormReports, 60000); // every 60 seconds
+  async function fetchStormReports() {
+      try {
+        const res = await fetch("https://mesonet.agron.iastate.edu/geojson/lsr.geojson?states=OH&hours=2");
+        const data = await res.json();
+        const reports = data.features;
+    
+        reports.forEach(report => {
+          const props = report.properties;
+          const id = `${props.valid}-${props.magnitude}-${props.city}`;
+          const reportTime = new Date(props.valid).getTime();
+        
+          if (lsrCache.has(id)) return;
+          if (reportTime <= pageLoadTime) {
+            lsrCache.add(id); // avoid showing later
+            return;
+          }
+        
+          const time = new Date(props.valid).toLocaleTimeString("en-US", { timeZone: "America/New_York" });
+          const event = props.typetext || props.type || "Storm Report";
+          const location = `${props.city}, ${props.county} Co`;
+          const magnitude = props.magnitude || props.magf || "";
+          const unit = props.unit || (event.toLowerCase().includes("hail") ? "in" : event.toLowerCase().includes("wind") ? "mph" : "");
+        
+          const magText = magnitude ? ` – ${magnitude}${unit}` : "";
+          const text = `🟢 ${event}${magText} – ${location} (${time})`;
+        
+          addStormReport(text);
+          lsrCache.add(id);
+        });
+    
+        // Trim the cache
+        if (lsrCache.size > 100) {
+          lsrCache = new Set(Array.from(lsrCache).slice(-50));
+        }
+    
+      } catch (err) {
+        console.error("⚠️ LSR Fetch Error:", err);
+      }
+    }
+  
+    function triggerPopup(text, type = "default") {
+      const popup = document.getElementById("alertPopup");
+      popup.textContent = text;
+    
+      // Remove any old color class
+      popup.classList.remove("popup-red", "popup-yellow", "popup-darkred");
+    
+      // Add new based on type
+      if (type === "Tornado Warning") popup.classList.add("popup-red");
+      else if (type === "Severe Thunderstorm Warning") popup.classList.add("popup-yellow");
+      else if (type === "Flash Flood Warning") popup.classList.add("popup-darkred");
+    
+      popup.classList.add("show");
+    
+      setTimeout(() => {
+        popup.classList.remove("show");
+      }, 15000);
+    }
+  
+    function addStormReport(text) {
+      const container = document.getElementById("stormReportsContainer");
+      const div = document.createElement("div");
+      div.className = "report-card";
+      div.innerText = text;
+      container.appendChild(div);
+    
+      // ✅ Play chime
+      const chime = document.getElementById("lsrChime");
+      if (chime) {
+        chime.currentTime = 0;
+        chime.play().catch(err => {
+          console.warn("🔇 Could not play LSR chime (possibly blocked by browser autoplay policy):", err);
+        });
+      }
+    
+      // ✅ Log to console
+      console.log("📢 New Storm Report:", text);
+    
+      setTimeout(() => container.removeChild(div), 15000);
+    }
+  
+  // Manual test
+  function triggerTest(type) {
+      const time = new Date();
+      const timeStr = time.toLocaleTimeString("en-US", { timeZone: "America/New_York" });
+      const expires = new Date(time.getTime() + 10 * 60 * 1000); // expires in 10 minutes
+      const text = `🚨 ${type} for Travis County until ${timeStr}`;
+    
+      triggerPopup(text, type);
+    
+      const fakeWarn = {
+        id: "test-" + type + "-" + time.getTime(),
+        text: `${type} – Travis County until ${timeStr}`,
+        type: eventColor(type),
+        expires: expires.toISOString()
+      };
+    
+      addActiveWarning(fakeWarn);
+    }
+  
+  function triggerStormReport() {
+      const time = new Date().toLocaleTimeString("en-US", { timeZone: "America/New_York" });
+      const text = `🟢 Hail Report – Golf Ball Size near Dayton, TX (${time})`;
+      addStormReport(text);
+    }
+  
+  function addActiveWarning(text, color) {
+    const li = document.createElement("li");
+    li.textContent = text;
+    li.style.borderLeftColor = color;
+    document.getElementById("activeWarningsList").appendChild(li);
+  }
+  
+  let tickerMessages = [];
+  let tickerIndex = 0;
+  let tickerInterval;
+  let lastTickerSnapshot = "";
+  
+  function updateTickerText() {
+      const listItems = Array.from(document.querySelectorAll('#activeWarningsList li'));
+      const newMessages = listItems.map(li => li.dataset.text || li.textContent);
+    
+      if (newMessages.length === 0) {
+        newMessages.push("✅ No active warnings in Ohio");
+      }
+    
+      const snapshot = newMessages.join("|||"); // compact representation
+    
+      // 🔄 Only update and restart if the list changed
+      if (snapshot !== lastTickerSnapshot) {
+        tickerMessages = newMessages;
+        tickerIndex = 0;
+        lastTickerSnapshot = snapshot;
+        startTickerRotation();
+      }
+    }
+  
+    function startTickerRotation() {
+      const rotator = document.getElementById("alertRotator");
+      if (!rotator || tickerMessages.length === 0) return;
+    
+      clearInterval(tickerInterval);
+      tickerIndex = 0;
+    
+      const applyTickerText = (message) => {
+        rotator.textContent = message;
+        rotator.classList.remove("ticker-red", "ticker-yellow", "ticker-darkred", "ticker-default");
+  
+  if (message.includes("Tornado Warning")) {
+    rotator.classList.add("ticker-red");
+  } else if (message.includes("Severe Thunderstorm Warning")) {
+    rotator.classList.add("ticker-yellow");
+  } else if (message.includes("Flash Flood Warning")) {
+    rotator.classList.add("ticker-darkred");
+  } else {
+    rotator.classList.add("ticker-default");
+  }
+  
+    
+        // Fade out preparation
+        rotator.style.transition = "none";
+        rotator.style.opacity = 1;
+        void rotator.offsetWidth; // trigger reflow
+    
+        // Measure overflow
+        setTimeout(() => {
+          const containerWidth = rotator.offsetWidth;
+          const textWidth = rotator.scrollWidth;
+        
+          rotator.classList.remove("scroll");
+          if (textWidth > containerWidth) {
+            // Delay the scroll by 2 seconds
+            setTimeout(() => {
+              rotator.classList.add("scroll");
+            }, 2000);
+          }
+        
+          rotator.style.transition = "opacity 0.5s ease-in-out";
+        }, 100);
+      };
+    
+      applyTickerText(tickerMessages[0]);
+    
+      if (tickerMessages.length > 1) {
+        tickerInterval = setInterval(() => {
+          rotator.style.opacity = 0;
+          setTimeout(() => {
+            tickerIndex = (tickerIndex + 1) % tickerMessages.length;
+            applyTickerText(tickerMessages[tickerIndex]);
+            rotator.style.opacity = 1;
+          }, 500);
+        }, 12000);
+      }
+    }
+    
+    // Also call in test
+    function addActiveWarning(warn) {
+      const list = document.getElementById("activeWarningsList");
+      const li = document.createElement("li");
+      li.dataset.id = warn.id;
+      li.style.borderLeftColor = warn.type;
+      li.classList.add("slide-in");
+    
+      const expires = new Date(warn.expires);
+    
+      const updateText = () => {
+        const remaining = Math.max(0, expires - Date.now());
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        li.dataset.text = warn.text; // clean version for ticker
+        li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`;
+      };
+    
+      updateText();
+    
+      const timer = setInterval(() => {
+        if (Date.now() >= expires) {
+          li.remove();
+          updateTickerText();
+          clearInterval(timer);
+        } else {
+          updateText();
+        }
+      }, 1000);
+    
+      activeWarningTimers.push(timer);
+      list.insertBefore(li, list.firstChild);
+      updateTickerText();
+    }
+  
+    // Make the test panel draggable
+  function makeTestPanelDraggable() {
+      const panel = document.getElementById("testPanel");
+      const header = document.getElementById("testPanelHeader");
+      let offsetX = 0, offsetY = 0, isDragging = false;
+    
+      header.addEventListener("mousedown", e => {
+        isDragging = true;
+        offsetX = e.clientX - panel.offsetLeft;
+        offsetY = e.clientY - panel.offsetTop;
+        document.body.style.userSelect = "none";
+      });
+    
+      document.addEventListener("mouseup", () => {
+        isDragging = false;
+        document.body.style.userSelect = "auto";
+      });
+    
+      document.addEventListener("mousemove", e => {
+        if (isDragging) {
+          panel.style.left = `${e.clientX - offsetX}px`;
+          panel.style.top = `${e.clientY - offsetY}px`;
+        }
+      });
+    }
+    
+    makeTestPanelDraggable();
+  
+  // Start fetch
+  fetchAndDisplayAlerts();
+  setInterval(fetchAndDisplayAlerts, 6000); // every 7 Seconds
+  
+  fetchStormReports();
+  setInterval(fetchStormReports, 10000); // every 10 seconds

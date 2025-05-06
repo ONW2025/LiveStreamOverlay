@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weather Alert Overlay</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Top-Center Alert Banner -->
+  <div id="alertPopup" class="popup"></div>
+  <audio id="lsrChime" src="lsr.wav" preload="auto"></audio>
+
+  <div id="sidebar">
+    <h2>Active Warnings</h2>
+    <ul id="activeWarningsList"></ul>
+  
+    <!-- Promo Rotation inside the sidebar -->
+    <div id="promoRotator">
+      <img src="Facebook Profile.PNG" alt="Facebook" class="promo-img" />
+      <img src="app store promo.png" alt="App Store" class="promo-img" />
+    </div>
+  </div>
+
+  <!-- Floating Storm Reports -->
+  <div id="stormReportsContainer"></div>
+
+  <!-- Manual Test Panel -->
+  <div id="testPanel">
+    <div id="testPanelHeader">⚙️ TEST PANEL</div>
+    <button onclick="triggerTest('Tornado Warning')">Test Tornado Warning</button>
+    <button onclick="triggerTest('Severe Thunderstorm Warning')">Test SVR Warning</button>
+    <button onclick="triggerTest('Flash Flood Warning')">Test Flash Flood Warning</button>
+    <button onclick="triggerStormReport()">Test Storm Report</button>
+  </div>
+
+  <div id="alertTickerWrapper">
+    <div id="alertRotator"></div>
+  </div>
+
+  <img id="onwLogo" src="ONW_Logo.png" alt="Ohio News and Weather Logo" />
+
+  <script src="alerts_tx.js"></script>
+</body>
+</html>
