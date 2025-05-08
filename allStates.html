@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Weather Alert Overlay</title>
+    <link rel="stylesheet" href="allStates.css" />
+  </head>
+  <body>
+    <!-- Top-Center Alert Banner -->
+    <div id="alertPopup" class="popup"></div>
+    <audio id="lsrChime" src="lsr.wav" preload="auto"></audio>
+
+    <!-- State Selector -->
+    <div id="stateSelectorWrapper" style="
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+">
+  <label for="stateSelector" style="font-size: 1.2em; margin-bottom: 0.5em;">Select state(s):</label>
+  <select id="stateSelector" multiple size="10" style="width: 250px; max-width: 90vw; margin-bottom: 1em; font-size: 1em;"></select>
+  <button onclick="confirmStateSelection()" style="padding: 0.5em 1em; font-size: 1em;">✔ Confirm Selection</button>
+</div>
+
+    <div id="sidebar">
+      <h2>Active Warnings</h2>
+      <ul id="activeWarningsList"></ul>
+
+      <!-- Promo Rotation inside the sidebar -->
+      <div id="promoRotator">
+        <img src="Facebook Profile.PNG" alt="Facebook" class="promo-img" />
+        <img src="app store promo.png" alt="App Store" class="promo-img" />
+      </div>
+    </div>
+
+    <!-- Floating Storm Reports -->
+    <div id="stormReportsContainer"></div>
+
+    <!-- Manual Test Panel -->
+    <div id="testPanel">
+      <div id="testPanelHeader">⚙️ TEST PANEL</div>
+      <button onclick="triggerTest('Tornado Warning')">
+        Test Tornado Warning
+      </button>
+      <button onclick="triggerTest('Severe Thunderstorm Warning')">
+        Test SVR Warning
+      </button>
+      <button onclick="triggerTest('Flash Flood Warning')">
+        Test Flash Flood Warning
+      </button>
+      <button onclick="triggerStormReport()">Test Storm Report</button>
+    </div>
+
+    <div id="alertTickerWrapper">
+      <div id="alertRotator"></div>
+    </div>
+
+    <img id="onwLogo" src="ONW_Logo.png" alt="Ohio News and Weather Logo" />
+
+    <script src="allStates.js"></script>
+  </body>
+</html>
