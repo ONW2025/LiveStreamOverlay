@@ -136,64 +136,67 @@ const ugcToCounty = {
 
   let activeWarningTimers = [];
   let lastSidebarSnapshot = "";
-  
-  function updateSidebar(warnings) {
-    const sidebar = document.getElementById("sidebar");
-    const list = document.getElementById("activeWarningsList");
-  
-    // Show or hide sidebar
-    if (warnings.length === 0) {
-      sidebar.style.display = "none"; // hide it
-    } else {
-      sidebar.style.display = "block"; // show it
+
+let sidebarRotationIndex = 0;
+let sidebarRotationInterval;
+let currentWarnings = [];
+
+function updateSidebar(warnings) {
+  const sidebar = document.getElementById("sidebar");
+  const list = document.getElementById("activeWarningsList");
+
+  if (!warnings || warnings.length === 0) { 
+    sidebar.style.display = "none"; 
+    const snapshot = "NO_ALERTS";
+    if (snapshot !== lastSidebarSnapshot) {
+        lastSidebarSnapshot = snapshot;
+        tickerMessages = ["✅ No active warnings in Ohio"];
+        lastTickerSnapshot = ""; 
+        tickerIndex = 0;
+        startTickerRotation();
     }
-  
-    // Create a snapshot of current data
-    const snapshot = warnings.map(w => w.id).join("|||");
-    if (snapshot === lastSidebarSnapshot) return;
-    lastSidebarSnapshot = snapshot;
-  
-    // Clear timers and list
-    activeWarningTimers.forEach(clearInterval);
-    activeWarningTimers = [];
+    return;
+}
+
+const snapshot = warnings.map(w => w.id).join("|||");
+if (snapshot === lastSidebarSnapshot) return;
+lastSidebarSnapshot = snapshot;
+
+  sidebar.style.display = "block";
+
+  // Sort warnings by priority
+  warnings.sort((a, b) => {
+    const priority = (event) =>
+      event.includes("Tornado Warning") ? 1 :
+      event.includes("Severe Thunderstorm Warning") ? 2 : 3;
+    return priority(a.text) - priority(b.text);
+  });
+
+  function renderSidebarBatch() {
     list.innerHTML = "";
-  
-    // ✅ No active warnings case
-    if (warnings.length === 0) {
-      const li = document.createElement("li");
-      li.textContent = "✅ No active warnings in Ohio";
-      li.classList.add("no-warning", "new-warning-flash");
-      setTimeout(() => li.classList.remove("new-warning-flash"), 2000);
-      list.appendChild(li);
-  
-      // Set ticker messages and trigger update
-      tickerMessages = ["✅ No active warnings in Ohio"];
-      lastTickerSnapshot = ""; // force update
-      updateTickerText();
-      return;
-    }
-  
-    // Populate active warnings
-    warnings.forEach(warn => {
+    const batch = warnings.slice(sidebarRotationIndex, sidebarRotationIndex + 4);
+
+    batch.forEach(warn => {
       const li = document.createElement("li");
       li.dataset.id = warn.id;
       li.dataset.text = warn.text;
       li.style.borderLeftColor = warn.type;
-      li.classList.add("slide-in", "new-warning-flash");
-      setTimeout(() => li.classList.remove("new-warning-flash"), 2000);
-  
-      const expires = new Date(warn.expires);
+      li.classList.add("slide-in");
+
+      const expiresTime = Date.parse(warn.expires);
+
       const updateText = () => {
-        const remaining = Math.max(0, expires - Date.now());
+        const now = Date.now();
+        const remaining = Math.max(0, expiresTime - now);
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
         li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`;
       };
-  
+
       updateText();
-  
+
       const timer = setInterval(() => {
-        if (Date.now() >= expires) {
+        if (Date.now() >= expiresTime) {
           li.remove();
           updateTickerText();
           clearInterval(timer);
@@ -201,13 +204,22 @@ const ugcToCounty = {
           updateText();
         }
       }, 1000);
-  
+
       activeWarningTimers.push(timer);
       list.appendChild(li);
     });
-  
-    updateTickerText();
+
+    sidebarRotationIndex = (sidebarRotationIndex + 4) % warnings.length;
   }
+
+  renderSidebarBatch();
+
+  if (warnings.length > 4) {
+    sidebarRotationInterval = setInterval(renderSidebarBatch, 12000); // Match ticker rotation
+  }
+
+  updateTickerText();
+}
   
   function eventColor(event) {
     switch (event) {
@@ -338,23 +350,20 @@ const ugcToCounty = {
   let lastTickerSnapshot = "";
   
   function updateTickerText() {
-      const listItems = Array.from(document.querySelectorAll('#activeWarningsList li'));
-      const newMessages = listItems.map(li => li.dataset.text || li.textContent);
-    
-      if (newMessages.length === 0) {
-        newMessages.push("✅ No active warnings in Ohio");
-      }
-    
-      const snapshot = newMessages.join("|||"); // compact representation
-    
-      // 🔄 Only update and restart if the list changed
-      if (snapshot !== lastTickerSnapshot) {
-        tickerMessages = newMessages;
-        tickerIndex = 0;
-        lastTickerSnapshot = snapshot;
-        startTickerRotation();
-      }
-    }
+  const newMessages = currentWarnings.map(w => w.text);
+  const finalMessages = newMessages.length > 0 
+    ? newMessages 
+    : ["✅ No active warnings in Ohio"];
+
+  const snapshot = finalMessages.join("|||");
+  if (snapshot !== lastTickerSnapshot) {
+    tickerMessages = finalMessages;
+    tickerIndex = 0;
+    lastTickerSnapshot = snapshot;
+    startTickerRotation();
+  }
+}
+
   
     function startTickerRotation() {
       const rotator = document.getElementById("alertRotator");

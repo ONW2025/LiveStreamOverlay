@@ -245,7 +245,7 @@ async function fetchAndDisplayAlerts() {
       });
 
       if (
-        !["Tornado Warning", "Severe Thunderstorm Warning"].includes(event) ||
+        !["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"].includes(event) ||
         msgType === "Cancel"
       ) {
         return;
@@ -289,73 +289,72 @@ let activeWarningTimers = [];
 let lastSidebarSnapshot = "";
 let displayedAlertIds = new Set(); // Keep track of displayed alert IDs
 
+let sidebarRotationIndex = 0;
+let sidebarRotationInterval;
+let currentWarnings = [];
+
 function updateSidebar(warnings) {
   const sidebar = document.getElementById("sidebar");
   const list = document.getElementById("activeWarningsList");
 
+  const snapshot = warnings.map(w => w.id).join("|||");
+  if (warnings.length > 0 && snapshot === lastSidebarSnapshot) return;
+  lastSidebarSnapshot = snapshot;
+
+  currentWarnings = warnings;
+  sidebarRotationIndex = 0;
+
+  clearInterval(sidebarRotationInterval);
   activeWarningTimers.forEach(clearInterval);
   activeWarningTimers = [];
 
-  const incomingAlertIds = new Set(warnings.map(warn => warn.id));
-  const existingListItems = Array.from(list.children);
+  if (!currentWarnings || currentWarnings.length === 0) {
+    sidebar.style.display = "none";
 
-  existingListItems.forEach(li => {
-    const alertId = li.dataset.id;
-    const matchingWarning = warnings.find(warn => warn.id === alertId);
+    // ✅ Update Ticker to show "No active warnings"
+    tickerMessages = ["✅ No Active Severe Weather Warnings"];
+    lastTickerSnapshot = "";
+    tickerIndex = 0;
+    startTickerRotation();
 
-    if (matchingWarning) {
-      // Alert is still active, update its text
-      const expiresTime = Date.parse(matchingWarning.expires);
-      const updateText = () => {
-        const now = Date.now();
-        const remaining = Math.max(0, expiresTime - now);
-        const mins = Math.floor(remaining / 60000);
-        const secs = Math.floor((remaining % 60000) / 1000);
-        li.textContent = `${matchingWarning.text} (expires in ${mins}m ${secs}s)`;
-      };
-      updateText();
-      const timer = setInterval(() => {
-        const now = Date.now();
-        if (now >= expiresTime) {
-          li.remove();
-          updateTickerText();
-          clearInterval(timer);
-        } else {
-          updateText();
-        }
-      }, 1000);
-      activeWarningTimers.push(timer);
-      incomingAlertIds.delete(alertId); // Mark as processed
-    } else {
-      // Alert is no longer active, remove it
-      li.remove();
-    }
+    return;
+  }
+
+  sidebar.style.display = "block";
+
+  // Sort by priority: Tornado > Thunderstorm > Others
+  currentWarnings.sort((a, b) => {
+    const priority = (event) =>
+      event.includes("Tornado Warning") ? 1 :
+      event.includes("Severe Thunderstorm Warning") ? 2 : 3;
+    return priority(a.text) - priority(b.text);
   });
 
-  // Add new alerts
-  incomingAlertIds.forEach(newAlertId => {
-    const newWarning = warnings.find(warn => warn.id === newAlertId);
-    if (newWarning) {
-      const li = document.createElement("li");
-      li.dataset.id = newWarning.id;
-      li.dataset.text = newWarning.text;
-      li.style.borderLeftColor = newWarning.type;
-      li.classList.add("slide-in");
-      li.classList.add("new-warning-flash");
-      setTimeout(() => li.classList.remove("new-warning-flash"), 2000);
+  function renderSidebarBatch() {
+    list.innerHTML = "";
+    const batch = currentWarnings.slice(sidebarRotationIndex, sidebarRotationIndex + 4);
 
-      const expiresTime = Date.parse(newWarning.expires);
+    batch.forEach((warn) => {
+      const li = document.createElement("li");
+      li.dataset.id = warn.id;
+      li.dataset.text = warn.text;
+      li.style.borderLeftColor = warn.type;
+      li.classList.add("slide-in");
+
+      const expiresTime = Date.parse(warn.expires);
+
       const updateText = () => {
         const now = Date.now();
         const remaining = Math.max(0, expiresTime - now);
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
-        li.textContent = `${newWarning.text} (expires in ${mins}m ${secs}s)`;
+        li.textContent = `${warn.text} (expires in ${mins}m ${secs}s)`;
       };
+
       updateText();
+
       const timer = setInterval(() => {
-        const now = Date.now();
-        if (now >= expiresTime) {
+        if (Date.now() >= expiresTime) {
           li.remove();
           updateTickerText();
           clearInterval(timer);
@@ -363,10 +362,19 @@ function updateSidebar(warnings) {
           updateText();
         }
       }, 1000);
+
       activeWarningTimers.push(timer);
       list.appendChild(li);
-    }
-  });
+    });
+
+    sidebarRotationIndex = (sidebarRotationIndex + 4) % currentWarnings.length;
+  }
+
+  renderSidebarBatch();
+
+  if (currentWarnings.length > 4) {
+    sidebarRotationInterval = setInterval(renderSidebarBatch, 12000); // Match ticker rotation
+  }
 
   updateTickerText();
 }
@@ -521,15 +529,13 @@ let tickerInterval;
 let lastTickerSnapshot = "";
 
 function updateTickerText() {
-  const listItems = Array.from(
-    document.querySelectorAll("#activeWarningsList li")
-  );
-  const newMessages = listItems
-    .map((li) => li.dataset.text || li.textContent)
-    .filter((msg) => !msg.includes("No active warnings")); // filter out non-alerts
+  const newMessages = currentWarnings  // Use the full current list of warnings
+    .map(w => w.text)
+    .filter(msg => !msg.includes("No active warnings"));
 
-  const finalMessages =
-    newMessages.length > 0 ? newMessages : ["✅ No active warnings in Ohio"];
+  const finalMessages = newMessages.length > 0 
+    ? newMessages 
+    : ["✅ No active warnings in Ohio"];
 
   const snapshot = finalMessages.join("|||");
   if (snapshot !== lastTickerSnapshot) {
