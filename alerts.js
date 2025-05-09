@@ -43,7 +43,7 @@ const ugcToCounty = {
 
   async function fetchAndDisplayAlerts() {
     try {
-      const res = await fetch("https://api.weather.gov/alerts/active.atom?area=OH");
+      const res = await fetch("https://api.weather.gov/alerts/active.atom?area=LA");
       const xmlText = await res.text();
       const parser = new DOMParser();
       const xml = parser.parseFromString(xmlText, "application/xml");
